@@ -147,11 +147,6 @@ class RPStream:
         _, self._protocol = await self._session.loop.create_datagram_endpoint(
             lambda: RPStream.Protocol(self), local_addr=("0.0.0.0", 0)
         )
-        # Create raw UDP socket for direct sending (bypasses asyncio proactor bugs)
-        # This is used for all outgoing packets in controller_only mode on Windows
-        if self._session.controller_only:
-            self._raw_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._raw_sock.setblocking(False)
         self._send_init()
 
     def run_av(self):
@@ -166,6 +161,11 @@ class RPStream:
         """Notify Session that stream is ready."""
         _LOGGER.debug("Stream Ready")
         self._state = RPStream.STATE_READY
+        # Create raw UDP socket for direct sending AFTER handshake completes
+        # This bypasses asyncio proactor bugs on Windows for controller feedback
+        if self._session.controller_only and not self._raw_sock:
+            self._raw_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._raw_sock.setblocking(False)
         # pylint: disable=protected-access
         self._session._set_ready()
 
