@@ -161,27 +161,25 @@ class RPStream:
         """Notify Session that stream is ready."""
         _LOGGER.debug("Stream Ready")
         self._state = RPStream.STATE_READY
-        # In controller_only mode on Windows, switch to raw socket for sending.
-        # We bind the raw socket to the SAME local port the asyncio transport used
-        # during handshake, so the PS5 recognizes our packets.
+        # In controller_only mode, get the underlying socket from the asyncio
+        # transport and use it directly for sending. This bypasses the proactor's
+        # buggy write buffering while still using the correct source port.
         if self._session.controller_only and not self._raw_sock:
             try:
-                # Get the local port from the asyncio transport
-                local_addr = self._protocol.transport.get_extra_info("sockname")
-                if local_addr:
-                    local_port = local_addr[1]
-                    self._raw_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    self._raw_sock.setsockopt(
-                        socket.SOL_SOCKET, socket.SO_REUSEADDR, 1
-                    )
-                    self._raw_sock.bind(("0.0.0.0", local_port))
+                sock = self._protocol.transport.get_extra_info("socket")
+                if sock:
+                    # Duplicate the socket so we can use it from another thread
+                    # without conflicting with the asyncio transport
+                    self._raw_sock = sock.dup()
                     self._raw_sock.setblocking(False)
-                    _LOGGER.info(
-                        "Raw socket bound to port %d for controller feedback",
-                        local_port,
-                    )
+                    _LOGGER.info("Using duplicated socket for controller feedback")
+                else:
+                    # Fallback: create new socket (won't match port but better than crash)
+                    self._raw_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self._raw_sock.setblocking(False)
+                    _LOGGER.warning("Could not get transport socket, using new socket")
             except (OSError, AttributeError) as e:
-                _LOGGER.warning("Could not create raw socket: %s", e)
+                _LOGGER.warning("Could not setup raw socket: %s", e)
                 self._raw_sock = None
         # pylint: disable=protected-access
         self._session._set_ready()
