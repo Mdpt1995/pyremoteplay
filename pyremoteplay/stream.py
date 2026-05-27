@@ -252,6 +252,9 @@ class RPStream:
         """Handle received packets."""
         av_type = Packet.is_av(msg[:1])
         if av_type:
+            # In controller-only mode, discard all AV packets immediately
+            if self._session.controller_only:
+                return
             if self._av_handler.has_receiver and not self._is_test:
                 self._av_handler.add_packet(msg)
             elif self._is_test and self._test:
