@@ -4,9 +4,17 @@ This example demonstrates how to use pyremoteplay in "controller-only" mode,
 similar to how XIM Matrix works - sending controller inputs to the console
 without processing any audio or video streams.
 
+How it works:
+- Authenticates with the PS4/PS5 via Remote Play protocol
+- Establishes the UDP stream channel (required for sending inputs)
+- Skips the network test (RTT/MTU) entirely
+- Discards ALL incoming AV packets without processing
+- Never starts the AV decoder worker thread
+- Only sends controller feedback packets (buttons + sticks)
+
 Benefits:
-- Minimal input lag (no AV decoding overhead)
-- Very low CPU/memory usage
+- Minimal input lag (no AV decoding, no network test delay)
+- Very low CPU/memory usage (zero video/audio processing)
 - No dependency on pyav/ffmpeg
 - Ideal for input adapters, automation, or accessibility tools
 
@@ -42,17 +50,23 @@ async def main():
         )
         return
 
-    # Create session in controller-only mode
-    # This disables ALL audio/video processing for minimum latency
+    # Create session in controller-only mode.
+    # This is ALL you need - no resolution, fps, codec, or receiver config required.
+    # The session will only authenticate and open the control channel.
     session = Session(
         host=HOST,
         profile=profile,
-        controller_only=True,  # <-- Key flag: no AV, only controller
+        controller_only=True,  # <-- Only auth + controller, zero AV
     )
 
     _LOGGER.info("Starting controller-only session to %s...", HOST)
 
-    # Start the session (handles auth, handshake, stream setup)
+    # Start the session
+    # In controller_only mode this will:
+    # 1. Discover host via DDP
+    # 2. Authenticate (HTTP handshake)
+    # 3. Get session ID
+    # 4. Open UDP stream (skip network test) -> handshake -> ready
     success = await session.start()
     if not success:
         _LOGGER.error("Failed to start session: %s", session.error)

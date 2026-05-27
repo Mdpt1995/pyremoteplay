@@ -331,8 +331,12 @@ class Session:
             )
 
         if self._controller_only:
-            # In controller-only mode, force no receiver and lowest stream settings
+            # In controller-only mode: no receiver, no AV processing at all.
+            # Force absolute minimum stream config since AV will be discarded anyway.
             receiver = None
+            self._quality = Quality.VERY_LOW
+            self._resolution = Resolution.RESOLUTION_360P
+            self._fps = FPS.LOW
         self.set_receiver(receiver)
 
     def _set_lowest_stream(self):
@@ -664,7 +668,11 @@ class Session:
         )
         await self._ready_event.wait()
         if autostart:
-            self._start_stream()
+            if self._controller_only:
+                # Skip network test, connect stream directly for controller input only
+                self._start_stream(test=False)
+            else:
+                self._start_stream()
         return True
 
     def stop(self):

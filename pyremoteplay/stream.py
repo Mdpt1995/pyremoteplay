@@ -417,7 +417,8 @@ class RPStream:
     def recv_stream_info(self, info: dict):
         """Receive stream info."""
         self._stream_info = info
-        self._av_handler.set_headers(info["video_header"], info["audio_header"])
+        if not self._session.controller_only:
+            self._av_handler.set_headers(info["video_header"], info["audio_header"])
 
     def recv_bang(self, accepted: bool, ecdh_pub_key: bytes, ecdh_sig: bytes):
         """Receive Bang Payload."""
@@ -428,7 +429,7 @@ class RPStream:
                 _LOGGER.error("RP Big Payload not accepted")
 
             if self.set_ciphers(ecdh_pub_key, ecdh_sig):
-                if self._av_handler.has_receiver:
+                if not self._session.controller_only and self._av_handler.has_receiver:
                     self._av_handler.set_cipher(self._cipher)
                 self._set_ready()
             else:
