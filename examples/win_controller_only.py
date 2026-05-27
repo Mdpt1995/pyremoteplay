@@ -122,6 +122,10 @@ async def main(host: str, user_index: int = 0, poll_rate: int = 1000, profile_pa
         controller_only=True,
     )
 
+    # ─── 4. Connect controller BEFORE starting session ───────────────────────
+    controller = Controller()
+    controller.connect(session)
+
     _LOGGER.info("Connecting to %s (controller-only, XInput %dHz)...", host, poll_rate)
 
     success = await session.start()
@@ -137,9 +141,6 @@ async def main(host: str, user_index: int = 0, poll_rate: int = 1000, profile_pa
 
     _LOGGER.info("Session READY!")
 
-    # ─── 4. Connect controller + start XInput polling ─────────────────────────
-    controller = Controller()
-    controller.connect(session)
     controller.start()
 
     gamepad.connect(controller)
