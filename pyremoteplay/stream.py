@@ -123,6 +123,8 @@ class RPStream:
         self._stream_info = None
         self.rtt = rtt if rtt is not None else DEFAULT_RTT
         self.mtu = mtu if mtu is not None else DEFAULT_MTU
+        # Raw UDP socket for direct sending (bypasses asyncio proactor bugs on Windows)
+        self._raw_sock = None
 
     def connect(self):
         """Connect socket to Host."""
@@ -145,6 +147,11 @@ class RPStream:
         _, self._protocol = await self._session.loop.create_datagram_endpoint(
             lambda: RPStream.Protocol(self), local_addr=("0.0.0.0", 0)
         )
+        # Create raw UDP socket for direct sending (bypasses asyncio proactor bugs)
+        # This is used for all outgoing packets in controller_only mode on Windows
+        if self._session.controller_only:
+            self._raw_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._raw_sock.setblocking(False)
         self._send_init()
 
     def run_av(self):
@@ -219,6 +226,8 @@ class RPStream:
 
     def send_feedback(self, feedback_type: int, sequence: int, data=b"", state=None):
         """Send feedback packet."""
+        if self._stop_event and self._stop_event.is_set():
+            return
         msg = FeedbackPacket(
             feedback_type,
             sequence=sequence,
@@ -246,7 +255,14 @@ class RPStream:
     def send(self, msg: bytes):
         """Send Message."""
         # log_bytes("Stream Send", msg)
-        self._protocol.sendto(msg, (self._host, self._port))
+        if self._raw_sock:
+            # Use raw socket directly - bypasses asyncio proactor bugs on Windows
+            try:
+                self._raw_sock.sendto(msg, (self._host, self._port))
+            except (OSError, AttributeError):
+                pass
+        else:
+            self._protocol.sendto(msg, (self._host, self._port))
 
     def handle(self, msg: bytes):
         """Handle received packets."""
@@ -263,7 +279,7 @@ class RPStream:
                 else:
                     self._test.recv_mtu(msg)
         else:
-            if not self._av_handler.has_receiver:
+            if self._session.controller_only or not self._av_handler.has_receiver:
                 self._handle_later(msg)
             else:
                 # Run in Executor if processing av.
@@ -411,6 +427,12 @@ class RPStream:
             if self._protocol:
                 self._disconnect()
                 self._protocol.close()
+            if self._raw_sock:
+                try:
+                    self._raw_sock.close()
+                except OSError:
+                    pass
+                self._raw_sock = None
             if self._cb_stop is not None:
                 self._cb_stop()
 
