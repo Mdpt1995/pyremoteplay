@@ -43,7 +43,7 @@ import time
 
 from pyremoteplay.session import Session
 from pyremoteplay.controller import Controller
-from pyremoteplay.profile import UserProfile
+from pyremoteplay.profile import Profiles
 from pyremoteplay.wininput import XInputGamepad, find_controllers
 
 logging.basicConfig(
@@ -104,11 +104,16 @@ async def main(host: str, user_index: int = 0, poll_rate: int = 1000, profile_pa
     _LOGGER.info("Controller found at index %d", user_index)
 
     # ─── 2. Load profile ──────────────────────────────────────────────────────
-    profile = UserProfile.load(profile_path)
-    if not profile or not profile.get("hosts"):
-        _LOGGER.error("No profile found. Register your device first.")
-        _LOGGER.error("See: https://pyremoteplay.readthedocs.io")
+    profiles = Profiles.load(profile_path or "")
+    if not profiles:
+        _LOGGER.error("No profiles found. Register your device first.")
+        _LOGGER.error("Run: python -m pyremoteplay")
         return
+
+    # Use first available profile
+    profile_name = list(profiles.keys())[0]
+    profile = profiles[profile_name]
+    _LOGGER.info("Using profile: %s", profile_name)
 
     # ─── 3. Create session (controller-only = zero AV) ────────────────────────
     session = Session(
