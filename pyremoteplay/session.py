@@ -281,6 +281,7 @@ class Session:
         quality: Union[Quality, str, int] = "default",
         codec: str = "h264",
         hdr: bool = False,
+        controller_only: bool = False,
     ):
         self.error = ""
         self.disconnect_reason = ""
@@ -309,6 +310,8 @@ class Session:
         self._stop_event = None
         self._ready_event = None
 
+        self._controller_only = controller_only
+
         self._quality = Quality.parse(quality)
         self._fps = FPS.parse(fps)
         self._resolution = Resolution.parse(resolution)
@@ -326,6 +329,14 @@ class Session:
             raise ValueError(
                 f"Codec: {self._codec} does not seem to match stream type: {self._stream_type.name}"
             )
+
+        if self._controller_only:
+            # In controller-only mode: no receiver, no AV processing at all.
+            # Force absolute minimum stream config since AV will be discarded anyway.
+            receiver = None
+            self._quality = Quality.VERY_LOW
+            self._resolution = Resolution.RESOLUTION_360P
+            self._fps = FPS.LOW
         self.set_receiver(receiver)
 
     def _set_lowest_stream(self):
@@ -628,7 +639,8 @@ class Session:
             # Set Stream settings to lowest possible to reduce load
             self._set_lowest_stream()
 
-        self.events.on("av_ready", self._init_av_handler)
+        if not self._controller_only:
+            self.events.on("av_ready", self._init_av_handler)
 
         if not self.loop:
             self._loop = asyncio.get_running_loop()
@@ -656,7 +668,11 @@ class Session:
         )
         await self._ready_event.wait()
         if autostart:
-            self._start_stream()
+            if self._controller_only:
+                # Skip network test, connect stream directly for controller input only
+                self._start_stream(test=False)
+            else:
+                self._start_stream()
         return True
 
     def stop(self):
@@ -834,6 +850,11 @@ class Session:
     def events(self) -> ExecutorEventEmitter:
         """Return Event Emitter."""
         return self._events
+
+    @property
+    def controller_only(self) -> bool:
+        """Return True if session is in controller-only mode (no AV processing)."""
+        return self._controller_only
 
     @property
     def loop(self) -> asyncio.AbstractEventLoop:

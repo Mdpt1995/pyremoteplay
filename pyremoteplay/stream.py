@@ -123,6 +123,8 @@ class RPStream:
         self._stream_info = None
         self.rtt = rtt if rtt is not None else DEFAULT_RTT
         self.mtu = mtu if mtu is not None else DEFAULT_MTU
+        # Raw UDP socket for direct sending (bypasses asyncio proactor bugs on Windows)
+        self._raw_sock = None
 
     def connect(self):
         """Connect socket to Host."""
@@ -159,6 +161,26 @@ class RPStream:
         """Notify Session that stream is ready."""
         _LOGGER.debug("Stream Ready")
         self._state = RPStream.STATE_READY
+        # In controller_only mode, get the underlying socket from the asyncio
+        # transport and use it directly for sending. This bypasses the proactor's
+        # buggy write buffering while still using the correct source port.
+        if self._session.controller_only and not self._raw_sock:
+            try:
+                sock = self._protocol.transport.get_extra_info("socket")
+                if sock:
+                    # Duplicate the socket so we can use it from another thread
+                    # without conflicting with the asyncio transport
+                    self._raw_sock = sock.dup()
+                    self._raw_sock.setblocking(False)
+                    _LOGGER.info("Using duplicated socket for controller feedback")
+                else:
+                    # Fallback: create new socket (won't match port but better than crash)
+                    self._raw_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self._raw_sock.setblocking(False)
+                    _LOGGER.warning("Could not get transport socket, using new socket")
+            except (OSError, AttributeError) as e:
+                _LOGGER.warning("Could not setup raw socket: %s", e)
+                self._raw_sock = None
         # pylint: disable=protected-access
         self._session._set_ready()
 
@@ -219,6 +241,8 @@ class RPStream:
 
     def send_feedback(self, feedback_type: int, sequence: int, data=b"", state=None):
         """Send feedback packet."""
+        if self._stop_event and self._stop_event.is_set():
+            return
         msg = FeedbackPacket(
             feedback_type,
             sequence=sequence,
@@ -246,12 +270,22 @@ class RPStream:
     def send(self, msg: bytes):
         """Send Message."""
         # log_bytes("Stream Send", msg)
-        self._protocol.sendto(msg, (self._host, self._port))
+        if self._raw_sock:
+            # Use raw socket directly - bypasses asyncio proactor bugs on Windows
+            try:
+                self._raw_sock.sendto(msg, (self._host, self._port))
+            except (OSError, AttributeError):
+                pass
+        else:
+            self._protocol.sendto(msg, (self._host, self._port))
 
     def handle(self, msg: bytes):
         """Handle received packets."""
         av_type = Packet.is_av(msg[:1])
         if av_type:
+            # In controller-only mode, discard all AV packets immediately
+            if self._session.controller_only:
+                return
             if self._av_handler.has_receiver and not self._is_test:
                 self._av_handler.add_packet(msg)
             elif self._is_test and self._test:
@@ -260,7 +294,7 @@ class RPStream:
                 else:
                     self._test.recv_mtu(msg)
         else:
-            if not self._av_handler.has_receiver:
+            if self._session.controller_only or not self._av_handler.has_receiver:
                 self._handle_later(msg)
             else:
                 # Run in Executor if processing av.
@@ -408,13 +442,20 @@ class RPStream:
             if self._protocol:
                 self._disconnect()
                 self._protocol.close()
+            if self._raw_sock:
+                try:
+                    self._raw_sock.close()
+                except OSError:
+                    pass
+                self._raw_sock = None
             if self._cb_stop is not None:
                 self._cb_stop()
 
     def recv_stream_info(self, info: dict):
         """Receive stream info."""
         self._stream_info = info
-        self._av_handler.set_headers(info["video_header"], info["audio_header"])
+        if not self._session.controller_only:
+            self._av_handler.set_headers(info["video_header"], info["audio_header"])
 
     def recv_bang(self, accepted: bool, ecdh_pub_key: bytes, ecdh_sig: bytes):
         """Receive Bang Payload."""
@@ -425,7 +466,7 @@ class RPStream:
                 _LOGGER.error("RP Big Payload not accepted")
 
             if self.set_ciphers(ecdh_pub_key, ecdh_sig):
-                if self._av_handler.has_receiver:
+                if not self._session.controller_only and self._av_handler.has_receiver:
                     self._av_handler.set_cipher(self._cipher)
                 self._set_ready()
             else:
