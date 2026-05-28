@@ -151,8 +151,8 @@ class WNDCLASSEX(ctypes.Structure):
         ("cbSize", ctypes.wintypes.UINT),
         ("style", ctypes.wintypes.UINT),
         ("lpfnWndProc", ctypes.WINFUNCTYPE(
-            ctypes.c_long, ctypes.wintypes.HWND, ctypes.wintypes.UINT,
-            ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM
+            ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_size_t, ctypes.c_ssize_t
         )),
         ("cbClsExtra", ctypes.c_int),
         ("cbWndExtra", ctypes.c_int),
@@ -289,9 +289,10 @@ class RawInputReader:
         self._key_events = 0
 
         # WndProc reference (prevent garbage collection)
+        # Use LRESULT (c_ssize_t) and pointer-sized params for 64-bit Windows
         self._wndproc = ctypes.WINFUNCTYPE(
-            ctypes.c_long, ctypes.wintypes.HWND, ctypes.wintypes.UINT,
-            ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM
+            ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint,
+            ctypes.c_size_t, ctypes.c_ssize_t
         )(self._window_proc)
 
     def start(self):
@@ -393,7 +394,7 @@ class RawInputReader:
         if msg == WM_INPUT:
             self._handle_raw_input(lparam)
             return 0
-        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam & 0xFFFFFFFFFFFFFFFF)
 
     def _handle_raw_input(self, lparam):
         """Parse raw input data from WM_INPUT message."""
