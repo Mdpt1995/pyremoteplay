@@ -53,6 +53,7 @@ from pyremoteplay.session import Session
 from pyremoteplay.controller import Controller
 from pyremoteplay.profile import Profiles
 from pyremoteplay.wininput.mouse_translator import MouseTranslator, TranslatorConfig
+from pyremoteplay.wininput.aim_curves import list_presets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,7 +63,7 @@ logging.basicConfig(
 _LOGGER = logging.getLogger(__name__)
 
 
-async def main(host: str, sensitivity: float, curve: float, smoothing: float, invert_y: bool):
+async def main(host: str, sensitivity: float, curve_preset: str, smoothing: float, invert_y: bool):
     """Run mouse/keyboard → PS5 session."""
 
     # ─── 1. Load profile ──────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ async def main(host: str, sensitivity: float, curve: float, smoothing: float, in
     config = TranslatorConfig(
         sensitivity_x=sensitivity,
         sensitivity_y=sensitivity,
-        aim_curve=curve,
+        curve_preset=curve_preset,
         smoothing=smoothing,
         invert_y=invert_y,
     )
@@ -118,7 +119,7 @@ async def main(host: str, sensitivity: float, curve: float, smoothing: float, in
     _LOGGER.info("  MOUSE & KEYBOARD → PS5 ACTIVE")
     _LOGGER.info("")
     _LOGGER.info("  Sensitivity: %.1f", sensitivity)
-    _LOGGER.info("  Aim Curve:   %.1f (1.0=linear, >1=exponential)", curve)
+    _LOGGER.info("  Curve:       %s", curve_preset)
     _LOGGER.info("  Smoothing:   %.1f", smoothing)
     _LOGGER.info("  Invert Y:    %s", invert_y)
     _LOGGER.info("")
@@ -156,10 +157,21 @@ if __name__ == "__main__":
         description="Mouse & Keyboard → PS5 Controller (XIM Matrix style)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Curve Presets:
+  linear      : Direct 1:1 mapping. Simple, can feel twitchy.
+  exponential : Slow at small movements, fast at large. Good precision.
+  s_curve     : Slow→fast→slow response. Natural feel.
+  ballistic   : Velocity-dependent. Slow=precision, fast=turns. (DEFAULT)
+  sniper      : Very slow, maximum precision. Long-range/scoped.
+  aggressive  : Very fast response. Close-range combat.
+  apex        : Mimics XIM APEX default. Balanced competitive FPS.
+
 Examples:
   %(prog)s --host 192.168.100.5
-  %(prog)s --host 192.168.100.5 --sens 20
-  %(prog)s --host 192.168.100.5 --sens 12 --curve 1.5 --smooth 0.3
+  %(prog)s --host 192.168.100.5 --sens 20 --curve ballistic
+  %(prog)s --host 192.168.100.5 --sens 8 --curve sniper
+  %(prog)s --host 192.168.100.5 --sens 25 --curve aggressive
+  %(prog)s --host 192.168.100.5 --curve apex --smooth 0.2
 
 Sensitivity Guide:
   5-10  : Very slow (sniper precision)
@@ -177,8 +189,9 @@ Sensitivity Guide:
         help="Mouse sensitivity (default: 15.0)",
     )
     parser.add_argument(
-        "--curve", "-c", type=float, default=1.0,
-        help="Aim curve exponent (1.0=linear, 1.5=exponential, default: 1.0)",
+        "--curve", "-c", type=str, default="ballistic",
+        choices=["linear", "exponential", "s_curve", "ballistic", "sniper", "aggressive", "apex"],
+        help="Aim curve preset (default: ballistic)",
     )
     parser.add_argument(
         "--smooth", type=float, default=0.0,
@@ -188,6 +201,17 @@ Sensitivity Guide:
         "--invert-y", action="store_true",
         help="Invert Y axis for mouse",
     )
+    parser.add_argument(
+        "--list-curves", action="store_true",
+        help="List available curve presets and exit",
+    )
 
     args = parser.parse_args()
-    asyncio.run(main(args.host, args.sens, args.curve, args.smooth, args.invert_y))
+
+    if args.list_curves:
+        print("\n=== Available Aim Curves ===\n")
+        for name, desc in list_presets().items():
+            print(f"  {name:14s} : {desc}")
+        print()
+    else:
+        asyncio.run(main(args.host, args.sens, args.curve, args.smooth, args.invert_y))

@@ -48,6 +48,7 @@ from .rawinput import (
     VK_1, VK_2, VK_3, VK_4,
     VK_F1, VK_F2,
 )
+from .aim_curves import AimCurve, CurvePreset, list_presets
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,7 +113,11 @@ class TranslatorConfig:
     sensitivity_x: float = 15.0
     sensitivity_y: float = 15.0
 
-    # Aim curve exponent (1.0 = linear, 2.0 = exponential, 0.5 = sqrt)
+    # Aim curve preset name or custom AimCurve instance
+    # Use string preset: "linear", "exponential", "s_curve", "ballistic", "sniper", "aggressive", "apex"
+    curve_preset: str = "ballistic"
+
+    # Legacy: simple exponent (ignored if curve_preset is set)
     aim_curve: float = 1.0
 
     # Smoothing (0.0 = none, 0.9 = very smooth/slow)
@@ -159,6 +164,9 @@ class MouseTranslator:
         self._controller: Optional[Controller] = None
         self._reader = RawInputReader()
         self._running = False
+
+        # Initialize aim curve from config
+        self._aim_curve = AimCurve.from_preset(self._config.curve_preset)
 
         # Stick state (WASD keys held)
         self._left_stick_x = 0.0
@@ -211,9 +219,9 @@ class MouseTranslator:
         self._stick_thread.start()
 
         _LOGGER.info(
-            "MouseTranslator started (sensitivity=%.1f/%.1f, curve=%.1f)",
+            "MouseTranslator started (sensitivity=%.1f/%.1f, curve=%s)",
             self._config.sensitivity_x, self._config.sensitivity_y,
-            self._config.aim_curve,
+            self._config.curve_preset,
         )
 
     def stop(self):
@@ -238,34 +246,28 @@ class MouseTranslator:
             self._process_mouse_buttons(event.button)
 
     def _process_mouse_aim(self, dx: int, dy: int):
-        """Convert mouse delta to right stick value."""
+        """Convert mouse delta to right stick value using ballistic curve."""
         cfg = self._config
-
-        # Apply sensitivity
-        raw_x = dx * cfg.sensitivity_x / 100.0
-        raw_y = dy * cfg.sensitivity_y / 100.0
 
         # Invert Y if configured
         if cfg.invert_y:
-            raw_y = -raw_y
+            dy = -dy
 
-        # Apply aim curve
-        if cfg.aim_curve != 1.0:
-            sign_x = 1.0 if raw_x >= 0 else -1.0
-            sign_y = 1.0 if raw_y >= 0 else -1.0
-            raw_x = sign_x * (abs(raw_x) ** cfg.aim_curve)
-            raw_y = sign_y * (abs(raw_y) ** cfg.aim_curve)
+        # Apply aim curve (ballistic processing)
+        stick_x, stick_y = self._aim_curve.apply_pair(
+            float(dx), float(dy), sensitivity=cfg.sensitivity_x
+        )
 
         # Apply smoothing
         if cfg.smoothing > 0:
-            self._smooth_x = self._smooth_x * cfg.smoothing + raw_x * (1.0 - cfg.smoothing)
-            self._smooth_y = self._smooth_y * cfg.smoothing + raw_y * (1.0 - cfg.smoothing)
-            raw_x = self._smooth_x
-            raw_y = self._smooth_y
+            self._smooth_x = self._smooth_x * cfg.smoothing + stick_x * (1.0 - cfg.smoothing)
+            self._smooth_y = self._smooth_y * cfg.smoothing + stick_y * (1.0 - cfg.smoothing)
+            stick_x = self._smooth_x
+            stick_y = self._smooth_y
 
-        # Clamp to [-1.0, 1.0]
-        stick_x = max(-cfg.stick_max, min(cfg.stick_max, raw_x))
-        stick_y = max(-cfg.stick_max, min(cfg.stick_max, raw_y))
+        # Clamp to max
+        stick_x = max(-cfg.stick_max, min(cfg.stick_max, stick_x))
+        stick_y = max(-cfg.stick_max, min(cfg.stick_max, stick_y))
 
         # Apply deadzone
         if abs(stick_x) < cfg.stick_deadzone:
@@ -451,6 +453,23 @@ class MouseTranslator:
     def running(self) -> bool:
         """Return True if running."""
         return self._running
+
+    @property
+    def curve_preset(self) -> str:
+        """Return current curve preset name."""
+        return self._config.curve_preset
+
+    @curve_preset.setter
+    def curve_preset(self, preset: str):
+        """Change curve preset at runtime."""
+        self._config.curve_preset = preset
+        self._aim_curve = AimCurve.from_preset(preset)
+        _LOGGER.info("Curve changed to: %s", preset)
+
+    @property
+    def aim_curve(self) -> AimCurve:
+        """Return current AimCurve instance."""
+        return self._aim_curve
 
     @property
     def total_mouse_events(self) -> int:
